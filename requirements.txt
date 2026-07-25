@@ -1,0 +1,24 @@
+# Core embedding + inference stack
+open_clip_torch>=2.24
+torch>=2.2
+torchvision>=0.17
+numpy>=1.26
+pillow>=10.0
+
+# Data handling & UX
+pandas>=2.1
+tqdm>=4.66
+
+# Similarity search backend (optional at runtime: the engine falls back to a
+# NumPy dot-product when FAISS is unavailable). Not published for every platform.
+faiss-cpu>=1.8; platform_system != "Darwin" or platform_machine != "arm64"
+
+# Benchmarking (peak-RAM measurement)
+psutil>=5.9
+
+# Interactive demo
+streamlit>=1.33
+
+# Routes Python SSL through the OS trust store so model downloads succeed behind
+# corporate proxies (whose root CA is trusted by the OS but not by certifi).
+truststore>=0.9

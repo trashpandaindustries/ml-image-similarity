@@ -1,0 +1,14 @@
+# Keep the build context minimal.
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+.venv
+venv
+embeddings/*.npy
+embeddings/*.csv
+embeddings/*.json
+demo/output
+*.log
+.DS_Store
+README.md
