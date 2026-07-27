@@ -347,7 +347,12 @@ def run(config: Config, limit: int | None = None) -> dict[str, Any]:
         for index, vector in iter_embeddings(model, to_embed, config):
             embedded[to_embed[index].path] = vector
             bar.update(1)
+
+
             # Periodic checkpoint so a long run can resume after interruption.
+
+            
+            
             if config.checkpoint_every and len(embedded) % config.checkpoint_every == 0:
                 persist(embedded, time.perf_counter() - start, final=False)
                 logger.info("Checkpoint saved at %d embedded images.", len(embedded))
