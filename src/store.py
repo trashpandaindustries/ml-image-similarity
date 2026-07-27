@@ -163,6 +163,7 @@ class EmbeddingStore:
         )
 
     # --- Atomic write helpers ----------------------------------------------------
+  #A crash mid-save can never corrupt an existing good index.
     @staticmethod
     def _atomic_np_save(path: Path, array: np.ndarray) -> None:
         # Write through a file handle so np.save does not append its own ".npy"
