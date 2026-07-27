@@ -283,6 +283,8 @@ def run(config: Config, limit: int | None = None) -> dict[str, Any]:
     prev_manifest = prev.manifest if prev is not None else pd.DataFrame(columns=MANIFEST_COLUMNS)
     prev_meta = prev.meta if prev is not None else {}
     reusable = _reusable_rows(prev_manifest, prev_meta, config)
+
+    
     #m
     fingerprints = {
         row.path: (int(row.size), int(row.mtime))
