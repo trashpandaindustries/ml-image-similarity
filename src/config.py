@@ -54,14 +54,16 @@ class Config:
 
     dataset_root: Path
     embeddings_dir: Path = REPO_ROOT / "embeddings"
-    model_name: str = "ViT-B-32"
-    pretrained: str = "laion2b_s34b_b79k"
+    model_name: str = "ViT-B-16-SigLIP"
+    pretrained: str = "WebLI"
     device: str = "auto"
     batch_size: int = 64
     num_workers: int = 6
     checkpoint_every: int = 10_000
     image_extensions: tuple[str, ...] = IMAGE_EXTENSIONS
     exclude_dirs: frozenset[str] = DEFAULT_EXCLUDE_DIRS
+    output_dim: int = 768
+ 
 
     # --- Derived persistence paths -------------------------------------------------
     @property

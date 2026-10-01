@@ -53,7 +53,7 @@ def test_store_roundtrip(tmp_path: Path) -> None:
 
     embeddings = _unit_rows(20, 512)
     manifest = _manifest(20)
-    store.save(embeddings, manifest, {"model_name": "ViT-B-32"})
+    store.save(embeddings, manifest, {"model_name": "ViT-B-16-SigLIP"})
 
     assert store.exists()
     loaded = store.load()
@@ -115,7 +115,7 @@ def _make_engine(tmp_path: Path) -> tuple[SimilarityEngine, np.ndarray]:
     """Build a small on-disk index and a SimilarityEngine (no model loaded)."""
     embeddings = _unit_rows(8, 16)
     EmbeddingStore(tmp_path / "emb").save(
-        embeddings, _manifest(8), {"model_name": "ViT-B-32", "pretrained": "tag"}
+        embeddings, _manifest(8), {"model_name": "ViT-B-16-SigLIP", "pretrained": "webli"}
     )
     config = Config(dataset_root=tmp_path, embeddings_dir=tmp_path / "emb")
     return SimilarityEngine(config), embeddings

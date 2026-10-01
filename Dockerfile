@@ -1,24 +1,7 @@
-# Production image for the WikiArt visual similarity engine.
+# Production image for the WikiArt visual similarity engine (CPU-only PyTorch).
 #
-# The dataset and the generated embeddings are mounted at runtime as volumes so
-# the image stays small and portable - it contains only code and dependencies.
-#
-# Build:
-#   docker build -t wikiart-similarity .
-#
-# Generate embeddings (dataset mounted read-only, embeddings mounted read-write):
-#   docker run --rm \
-#     -v /data/wikiart:/data/wikiart:ro \
-#     -v $(pwd)/embeddings:/app/embeddings \
-#     -e WIKIART_DATASET_ROOT=/data/wikiart \
-#     wikiart-similarity python -m src.embed
-#
-# Launch the interactive demo on http://localhost:8501:
-#   docker run --rm -p 8501:8501 \
-#     -v /data/wikiart:/data/wikiart:ro \
-#     -v $(pwd)/embeddings:/app/embeddings \
-#     -e WIKIART_DATASET_ROOT=/data/wikiart \
-#     wikiart-similarity
+# Prefer docker-compose.yml, which wires up the dataset mount, persistent
+# embeddings volume, persistent model cache and shared memory for you.
 
 FROM python:3.11-slim AS runtime
 
@@ -32,12 +15,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/app/.cache/huggingface \
     WIKIART_DATASET_ROOT=/data/wikiart \
-    EMBEDDINGS_DIR=/app/embeddings
+    EMBEDDINGS_DIR=/app/embeddings \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
 WORKDIR /app
 
-# Install CPU-only PyTorch wheels first to avoid pulling large CUDA packages,
-# then the remaining dependencies. Layer is cached unless requirements change.
+# CPU-only PyTorch first (avoids multi-GB CUDA wheels), then the rest.
 COPY requirements.txt .
 RUN pip install --index-url https://download.pytorch.org/whl/cpu \
         torch torchvision \
@@ -47,7 +30,8 @@ COPY src ./src
 COPY demo ./demo
 COPY scripts ./scripts
 
-# Run as an unprivileged user; pre-create writable mount points.
+# Unprivileged user. The dirs are created + chowned here so that *named volumes*
+# mounted over them inherit the right ownership on first use.
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p /app/embeddings /app/.cache/huggingface \
     && chown -R appuser:appuser /app
@@ -55,6 +39,9 @@ USER appuser
 
 EXPOSE 8501
 
-# Default to the interactive demo; override with any `python -m src.*` command.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request as u; u.urlopen('http://localhost:8501/_stcore/health', timeout=3)" || exit 1
+
+# Default: interactive demo. Override with any `python -m src.*` command.
 CMD ["streamlit", "run", "demo/app.py", \
      "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]

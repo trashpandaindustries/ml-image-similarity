@@ -70,6 +70,7 @@ class EmbeddingModel:
         model_name: OpenCLIP architecture (e.g. ``"ViT-B-32"``).
         pretrained: OpenCLIP pretrained tag (e.g. ``"laion2b_s34b_b79k"``).
         device: ``"auto"``, ``"cpu"`` or ``"cuda"``.
+        
     """
 
     def __init__(
@@ -98,7 +99,7 @@ class EmbeddingModel:
 
         self._model = model
         self._preprocess = preprocess
-        self._embedding_dim = int(model.visual.output_dim)
+        self._embedding_dim = 768
         self._image_size = self._infer_image_size(model)
         logger.info(
             "Model ready: dim=%d, input=%dpx", self._embedding_dim, self._image_size

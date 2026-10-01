@@ -1,0 +1,50 @@
+# WikiArt similarity engine - compose / Portainer stack
+#
+#   cp .env.example .env        # set WIKIART_PATH
+#   docker compose run --rm embed          # one-off: build the index (resumable)
+#   docker compose up -d app               # Streamlit UI on http://localhost:8501
+#
+# Smoke test on a subset first:
+#   docker compose run --rm embed python -m src.embed --limit 2000
+
+x-common: &common
+  image: wikiart-similarity:latest
+  build: .
+  shm_size: "2gb"   # PyTorch DataLoader workers need more than Docker's 64MB default
+  environment:
+    WIKIART_DATASET_ROOT: /data/wikiart
+    EMBEDDINGS_DIR: /app/embeddings
+    HF_HOME: /app/.cache/huggingface
+    NUM_WORKERS: ${NUM_WORKERS:-4}
+    BATCH_SIZE: ${BATCH_SIZE:-64}
+    DEVICE: ${DEVICE:-auto}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  volumes:
+    - ${WIKIART_PATH:?Set WIKIART_PATH to your WikiArt dataset root}:/data/wikiart:ro
+    - embeddings:/app/embeddings      # index survives container recreation
+    - hf-cache:/app/.cache/huggingface  # ~600MB model weights downloaded once
+
+services:
+  app:
+    <<: *common
+    container_name: wikiart-app
+    ports:
+      - "${APP_PORT:-8501}:8501"
+    restart: unless-stopped
+
+  # Tools: not started by `up`; run with `docker compose run --rm <name>`
+  embed:
+    <<: *common
+    profiles: ["tools"]
+    command: ["python", "-m", "src.embed"]
+    restart: "no"
+
+  benchmark:
+    <<: *common
+    profiles: ["tools"]
+    command: ["python", "scripts/benchmark.py", "--queries", "50"]
+    restart: "no"
+
+volumes:
+  embeddings:
+  hf-cache:
