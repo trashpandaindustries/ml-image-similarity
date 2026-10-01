@@ -63,7 +63,6 @@ class Config:
     image_extensions: tuple[str, ...] = IMAGE_EXTENSIONS
     exclude_dirs: frozenset[str] = DEFAULT_EXCLUDE_DIRS
     output_dim: int = 768
- 
 
     # --- Derived persistence paths -------------------------------------------------
     @property

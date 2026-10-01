@@ -230,6 +230,7 @@ class SimilarityEngine:
                 self._meta.get("model_name", self._config.model_name),
                 self._meta.get("pretrained", self._config.pretrained),
                 self._config.device,
+                fallback_dim=self._meta.get("output_dim", self._config.output_dim),
             )
         return self._model
 

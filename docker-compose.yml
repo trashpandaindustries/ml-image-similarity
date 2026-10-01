@@ -23,7 +23,13 @@ x-common: &common
     - ${WIKIART_PATH:?Set WIKIART_PATH to your WikiArt dataset root}:/data/wikiart:ro
     - embeddings:/app/embeddings      # index survives container recreation
     - hf-cache:/app/.cache/huggingface  # ~600MB model weights downloaded once
-
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
 services:
   app:
     <<: *common

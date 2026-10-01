@@ -20,10 +20,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# CPU-only PyTorch first (avoids multi-GB CUDA wheels), then the rest.
 COPY requirements.txt .
-RUN pip install --index-url https://download.pytorch.org/whl/cpu \
-        torch torchvision \
+
+# CUDA-enabled PyTorch
+RUN pip install torch torchvision \
+        --index-url https://download.pytorch.org/whl/cu128 \
     && pip install -r requirements.txt
 
 COPY src ./src

@@ -46,13 +46,13 @@ def _render_results(engine: SimilarityEngine, query_path: Path, top_k: int) -> N
     left, right = st.columns([1, 3], gap="large")
     with left:
         st.markdown("#### Query")
-        st.image(str(query_path), use_container_width=True)
+        st.image(str(query_path), width='stretch')
     with right:
         st.markdown(f"#### Top {top_k} similar")
         cols = st.columns(top_k)
         for col, result in zip(cols, results):
             with col:
-                st.image(result.abspath, use_container_width=True)
+                st.image(result.abspath, width='stretch')
                 st.markdown(
                     f"**{result.score:.3f}**  \n"
                     f"{result.artist.title() or 'Unknown'}  \n"

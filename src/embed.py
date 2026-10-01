@@ -316,7 +316,12 @@ def run(config: Config, limit: int | None = None) -> dict[str, Any]:
         logger.info("Index already up to date; nothing to do.")
         return prev_meta
 
-    model = EmbeddingModel(config.model_name, config.pretrained, config.device)
+    model = EmbeddingModel(
+        config.model_name,
+        config.pretrained,
+        config.device,
+        fallback_dim=config.output_dim,
+    )
     artist_lookup = load_metadata(config)
 
     def persist(embedded: dict[str, np.ndarray], seconds: float, final: bool) -> None:

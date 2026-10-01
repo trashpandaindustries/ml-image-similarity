@@ -70,7 +70,7 @@ class EmbeddingModel:
         model_name: OpenCLIP architecture (e.g. ``"ViT-B-32"``).
         pretrained: OpenCLIP pretrained tag (e.g. ``"laion2b_s34b_b79k"``).
         device: ``"auto"``, ``"cpu"`` or ``"cuda"``.
-        
+        fallback_dim: Default embedding dimension if the model doesn't expose it.
     """
 
     def __init__(
@@ -78,6 +78,7 @@ class EmbeddingModel:
         model_name: str = "ViT-B-32",
         pretrained: str = "laion2b_s34b_b79k",
         device: str = "auto",
+        fallback_dim: int | None = None,
     ) -> None:
         self.model_name = model_name
         self.pretrained = pretrained
@@ -89,19 +90,34 @@ class EmbeddingModel:
         model, _, preprocess = open_clip.create_model_and_transforms(
             model_name, pretrained=pretrained
         )
+
         model.eval().to(self.device)
 
-        # PyTorch defaults CPU inference to the physical-core count, which is
-        # optimal for this GEMM-bound ViT; override with the standard
-        # ``OMP_NUM_THREADS`` / ``torch.set_num_threads`` if needed.
         if self.device.type == "cpu":
             logger.info("CPU inference using %d threads", torch.get_num_threads())
 
         self._model = model
         self._preprocess = preprocess
+        self._embedding_dim = self._infer_embedding_dim(model, fallback_dim=fallback_dim)
         self._image_size = self._infer_image_size(model)
         logger.info(
-            "Model ready: dim=%d, input=%dpx", self.output_dim, self._image_size
+            "Model ready: dim=%d, input=%dpx", self._embedding_dim, self._image_size
+        )
+
+    @staticmethod
+    def _infer_embedding_dim(model: torch.nn.Module, fallback_dim: int | None = None) -> int:
+        if hasattr(model, "visual") and hasattr(model.visual, "output_dim"):
+            return int(model.visual.output_dim)
+
+        if hasattr(model, "visual") and hasattr(model.visual, "proj") and model.visual.proj is not None:
+            return int(model.visual.proj.shape[-1])
+
+        if fallback_dim is not None:
+            return fallback_dim
+
+        # TimmModel / models without an exposed output dimension
+        raise RuntimeError(
+            f"Cannot determine embedding dimension for {type(model.visual).__name__}"
         )
 
     # --- Introspection ------------------------------------------------------------
@@ -124,16 +140,8 @@ class EmbeddingModel:
 
     # --- Image loading & preprocessing --------------------------------------------
     def load_image(self, path: str) -> Image.Image:
-        """Open an image as RGB using fast draft-mode JPEG decoding.
-
-        Args:
-            path: Filesystem path to the image.
-
-        Returns:
-            The decoded RGB image.
-        """
+        """Open an image as RGB using fast draft-mode JPEG decoding."""
         image = Image.open(path)
-        # DCT-scaled decode; a hint only, ignored for non-JPEG formats.
         image.draft("RGB", (self._image_size, self._image_size))
         return image.convert("RGB")
 
@@ -148,14 +156,7 @@ class EmbeddingModel:
     # --- Embedding generation ------------------------------------------------------
     @torch.inference_mode()
     def encode_batch(self, batch: torch.Tensor) -> np.ndarray:
-        """Encode a preprocessed batch into L2-normalised embeddings.
-
-        Args:
-            batch: Tensor of shape ``[B, C, H, W]``.
-
-        Returns:
-            ``float32`` array of shape ``[B, D]`` with unit-norm rows.
-        """
+        """Encode a preprocessed batch into L2-normalised embeddings."""
         batch = batch.to(self.device, non_blocking=True)
         features = self._model.encode_image(batch)
         features = torch.nn.functional.normalize(features, dim=-1)
