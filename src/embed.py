@@ -125,8 +125,14 @@ def load_metadata(config: Config) -> dict[str, str]:
 
 def _title_from_path(rel_path: str) -> tuple[str, str]:
     """Derive ``(artist_slug, title)`` from a ``style/artist_title.ext`` path."""
-    stem = Path(rel_path).stem
+    p = Path(rel_path)
+    stem = p.stem
+    if len(p.parts) >= 3:  # style/artist/title.ext
+        artist = p.parts[1].replace("-", " ").replace("_", " ").strip()
+        title = stem.replace("-", " ").replace("_", " ").strip()
+        return artist, title
     artist_slug, _, title_slug = stem.partition("_")
+
     artist = artist_slug.replace("-", " ").strip()
     title = (title_slug or stem).replace("-", " ").strip()
     return artist, title

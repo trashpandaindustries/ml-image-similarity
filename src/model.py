@@ -99,10 +99,9 @@ class EmbeddingModel:
 
         self._model = model
         self._preprocess = preprocess
-        self._embedding_dim = 768
         self._image_size = self._infer_image_size(model)
         logger.info(
-            "Model ready: dim=%d, input=%dpx", self._embedding_dim, self._image_size
+            "Model ready: dim=%d, input=%dpx", self.output_dim, self._image_size
         )
 
     # --- Introspection ------------------------------------------------------------
