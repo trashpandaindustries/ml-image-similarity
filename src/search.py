@@ -3,17 +3,17 @@
 Run as a module::
 
     python -m src.search --query "/path/to/image.jpg" --top-k 5
+    python -m src.search --query img.jpg --identify
+    python -m src.search --query img.jpg --style Realism --backend pg
 
-The search backend sits behind the :class:`SimilaritySearcher` abstraction. When
-FAISS is installed a flat inner-product index (``IndexFlatIP``) is used; otherwise
-the code falls back to a vectorised NumPy dot-product. Both operate on
-L2-normalised vectors, so the inner product *is* cosine similarity and the public
-API is identical regardless of backend.
+Storage sits behind :class:`~src.backend.VectorBackend`:
 
-For this dataset (~81k x 512 ``float32`` = ~167 MB) an exact flat index is the
-right engineering choice: it returns exact nearest neighbours, needs no training
-or tuning, and answers a query in single-digit milliseconds. Approximate indexes
-(IVF/HNSW) only earn their added complexity at 10-100x this scale.
+* ``FlatFileBackend`` (here): ``embeddings.npy`` + ``manifest.csv`` searched with
+  FAISS ``IndexFlatIP`` or a NumPy dot product (exact).
+* ``PgVectorBackend`` (``src.pg_backend``): Supabase/Postgres + pgvector HNSW.
+
+Both operate on L2-normalised vectors, so inner product / cosine distance give
+identical scores in ``[-1, 1]`` and the public API is the same either way.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import json
 import logging
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,11 +30,25 @@ import numpy as np
 import pandas as pd
 from PIL import Image, UnidentifiedImageError
 
+from .backend import ArtistVote, SearchResult, VectorBackend, split_path
 from .config import Config
 from .logging_utils import configure_logging
 from .store import EmbeddingStore
 
 logger = logging.getLogger("src.search")
+
+__all__ = [
+    "ArtistVote",
+    "FaissSearcher",
+    "FlatFileBackend",
+    "InvalidQueryImageError",
+    "NumpySearcher",
+    "SearchResult",
+    "SimilarityEngine",
+    "SimilaritySearcher",
+    "build_searcher",
+    "make_backend",
+]
 
 # Errors raised by Pillow/decoding when a query image is corrupt or unsupported.
 _DECODE_ERRORS: tuple[type[Exception], ...] = (
@@ -55,7 +68,7 @@ class InvalidQueryImageError(ValueError):
 
 
 # --------------------------------------------------------------------------------------
-# Backend abstraction
+# In-memory searcher abstraction (used by the flat-file backend)
 # --------------------------------------------------------------------------------------
 class SimilaritySearcher(ABC):
     """Backend-agnostic nearest-neighbour search over unit-norm vectors."""
@@ -125,7 +138,6 @@ class NumpySearcher(SimilaritySearcher):
 
     def __init__(self, embeddings: np.ndarray) -> None:
         super().__init__(embeddings)
-        # Keep a contiguous float32 copy for fast, cache-friendly GEMM.
         self._matrix = np.ascontiguousarray(embeddings, dtype=np.float32)
 
     @property
@@ -135,9 +147,7 @@ class NumpySearcher(SimilaritySearcher):
     def search(self, queries: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
         q = self._as_2d(queries)
         k = min(k, self._n)
-        # [Q, N] similarity matrix; one GEMM call.
         sims = q @ self._matrix.T
-        # argpartition finds the top-k unordered in O(N), then we sort only k.
         part = np.argpartition(-sims, kth=k - 1, axis=1)[:, :k]
         part_scores = np.take_along_axis(sims, part, axis=1)
         order = np.argsort(-part_scores, axis=1)
@@ -147,15 +157,7 @@ class NumpySearcher(SimilaritySearcher):
 
 
 def build_searcher(embeddings: np.ndarray, prefer_faiss: bool = True) -> SimilaritySearcher:
-    """Construct the best available searcher for the given embeddings.
-
-    Args:
-        embeddings: ``[N, D]`` matrix of L2-normalised vectors.
-        prefer_faiss: When ``True`` use FAISS if it can be imported.
-
-    Returns:
-        A ready-to-query :class:`SimilaritySearcher`.
-    """
+    """Construct the best available searcher for the given embeddings."""
     if prefer_faiss:
         try:
             searcher: SimilaritySearcher = FaissSearcher(embeddings)
@@ -171,46 +173,25 @@ def build_searcher(embeddings: np.ndarray, prefer_faiss: bool = True) -> Similar
 
 
 # --------------------------------------------------------------------------------------
-# High-level engine
+# Flat-file backend
 # --------------------------------------------------------------------------------------
-@dataclass(frozen=True)
-class SearchResult:
-    """A single ranked search hit."""
-
-    rank: int
-    score: float
-    path: str  # relative to the dataset root
-    abspath: str
-    style: str
-    artist: str
-    title: str
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-class SimilarityEngine:
-    """Loads a persisted index and answers image-similarity queries.
-
-    The engine lazily loads the embedding model only when a query needs to be
-    encoded, so read-only workflows (e.g. re-ranking precomputed vectors) never
-    pay the model-loading cost.
-    """
+class FlatFileBackend:
+    """``VectorBackend`` over the ``embeddings.npy`` + ``manifest.csv`` index."""
 
     def __init__(self, config: Config, prefer_faiss: bool = True, mmap: bool = False) -> None:
         self._config = config
-        self._store = EmbeddingStore(config.embeddings_dir)
-        index = self._store.load(mmap=mmap)
+        index = EmbeddingStore(config.embeddings_dir).load(mmap=mmap)
         self._embeddings = index.embeddings
         self._manifest: pd.DataFrame = index.manifest.reset_index(drop=True)
         self._meta = index.meta
         self._searcher = build_searcher(np.asarray(self._embeddings), prefer_faiss=prefer_faiss)
-        self._path_to_row = {p: i for i, p in enumerate(self._manifest["path"])}
-        self._model = None  # lazily initialised
+        paths = self._manifest["path"].tolist()
+        self._path_to_row = {p: i for i, p in enumerate(paths)}
+        self._slugs = np.array([split_path(p)[1] for p in paths])
+        self._styles = self._manifest["style"].fillna("").astype(str).to_numpy()
 
-    # --- Introspection ------------------------------------------------------------
     @property
-    def backend(self) -> str:
+    def backend_name(self) -> str:
         return self._searcher.backend
 
     @property
@@ -220,19 +201,6 @@ class SimilarityEngine:
     @property
     def meta(self) -> dict[str, Any]:
         return dict(self._meta)
-
-    # --- Querying -----------------------------------------------------------------
-    def _get_model(self):
-        if self._model is None:
-            from .model import EmbeddingModel
-
-            self._model = EmbeddingModel(
-                self._meta.get("model_name", self._config.model_name),
-                self._meta.get("pretrained", self._config.pretrained),
-                self._config.device,
-                fallback_dim=self._meta.get("output_dim", self._config.output_dim),
-            )
-        return self._model
 
     def _row_to_result(self, rank: int, row_idx: int, score: float) -> SearchResult:
         row = self._manifest.iloc[row_idx]
@@ -247,47 +215,142 @@ class SimilarityEngine:
             title=str(row.get("title", "")),
         )
 
-    def search_vector(
-        self, vector: np.ndarray, k: int = 5, exclude_rows: set[int] | None = None
+    def search(
+        self,
+        vector: np.ndarray,
+        k: int,
+        *,
+        style: str | None = None,
+        artist: str | None = None,
+        exclude_path: str | None = None,
     ) -> list[SearchResult]:
-        """Return the top-``k`` results for a precomputed query vector."""
-        exclude_rows = exclude_rows or set()
-        # Over-fetch so we can drop excluded rows (e.g. the query itself).
-        fetch = min(self.size, k + len(exclude_rows) + 1)
-        scores, indices = self._searcher.search(vector.astype(np.float32), fetch)
+        exclude: set[int] = set()
+        if exclude_path is not None and exclude_path in self._path_to_row:
+            exclude.add(self._path_to_row[exclude_path])
+        q = np.asarray(vector, dtype=np.float32)
+
+        if style or artist:
+            mask = np.ones(self.size, dtype=bool)
+            if style:
+                mask &= self._styles == style
+            if artist:
+                mask &= self._slugs == artist.lower()
+            rows = np.flatnonzero(mask)
+            if exclude:
+                rows = rows[~np.isin(rows, list(exclude))]
+            if not len(rows):
+                return []
+            sims = np.asarray(self._embeddings)[rows] @ q
+            top = np.argsort(-sims)[:k]
+            return [
+                self._row_to_result(i + 1, int(rows[j]), float(sims[j]))
+                for i, j in enumerate(top)
+            ]
+
+        fetch = min(self.size, k + len(exclude) + 1)
+        scores, indices = self._searcher.search(q, fetch)
         results: list[SearchResult] = []
         for score, idx in zip(scores[0], indices[0]):
-            if idx in exclude_rows or idx < 0:
+            if idx in exclude or idx < 0:
                 continue
             results.append(self._row_to_result(len(results) + 1, int(idx), float(score)))
             if len(results) == k:
                 break
         return results
 
-    def search(
-        self, image_path: str | Path, k: int = 5, exclude_self: bool = True
-    ) -> list[SearchResult]:
-        """Return the top-``k`` images most similar to ``image_path``.
+    def identify(self, vector: np.ndarray, k: int = 50, top: int = 5) -> list[ArtistVote]:
+        agg: dict[str, dict[str, Any]] = {}
+        for hit in self.search(vector, k):
+            slug = split_path(hit.path)[1]
+            if not slug:
+                continue
+            entry = agg.setdefault(
+                slug, {"name": hit.artist, "weight": 0.0, "votes": 0, "best": -1.0}
+            )
+            entry["weight"] += hit.score
+            entry["votes"] += 1
+            entry["best"] = max(entry["best"], hit.score)
+        ranked = sorted(agg.items(), key=lambda kv: kv[1]["weight"], reverse=True)[:top]
+        return [
+            ArtistVote(slug=s, name=e["name"], weight=e["weight"], votes=e["votes"], best=e["best"])
+            for s, e in ranked
+        ]
 
-        Args:
-            image_path: Query image on disk (in or outside the dataset).
-            k: Number of results to return.
-            exclude_self: Drop the query image from results when it is part of
-                the indexed corpus.
+    def sample_paths(self, n: int, seed: str | int = 0) -> list[str]:
+        state = abs(hash(str(seed))) % (2**32) if not isinstance(seed, int) else seed
+        return self._manifest.sample(min(n, len(self._manifest)), random_state=state)[
+            "path"
+        ].tolist()
 
-        Returns:
-            Ranked results, most similar first.
 
-        Raises:
-            FileNotFoundError: If the query path does not exist.
-            InvalidQueryImageError: If the file exists but cannot be decoded.
-        """
+def make_backend(config: Config, prefer_faiss: bool = True, mmap: bool = False) -> VectorBackend:
+    """Build the storage backend selected by ``config.store_backend``."""
+    # line num check
+    if config.store_backend == "pg":
+        from .pg_backend import PgVectorBackend  # lazy: psycopg is optional for flat mode
+
+        return PgVectorBackend.from_config(config)
+    return FlatFileBackend(config, prefer_faiss=prefer_faiss, mmap=mmap)
+
+
+# --------------------------------------------------------------------------------------
+# High-level engine
+# --------------------------------------------------------------------------------------
+class SimilarityEngine:
+    """Answers image-similarity queries against a :class:`VectorBackend`.
+
+    The embedding model is loaded lazily, only when a query image must be
+    encoded, so read-only workflows never pay the model-loading cost.
+    """
+
+    def __init__(
+        self,
+        config: Config,
+        prefer_faiss: bool = True,
+        mmap: bool = False,
+        backend: VectorBackend | None = None,
+    ) -> None:
+        self._config = config
+        self._backend: VectorBackend = backend or make_backend(config, prefer_faiss, mmap)
+        self._model = None  # lazily initialised
+
+    # --- Introspection ------------------------------------------------------------
+    @property
+    def backend(self) -> str:
+        return self._backend.backend_name
+
+    @property
+    def size(self) -> int:
+        return self._backend.size
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._backend.meta
+
+    def sample_paths(self, n: int, seed: str | int = 0) -> list[str]:
+        """Return ``n`` indexed relative paths (used by demos and benchmarks)."""
+        return self._backend.sample_paths(n, seed)
+
+    # --- Model --------------------------------------------------------------------
+    def _get_model(self):
+        if self._model is None:
+            from .model import EmbeddingModel
+
+            meta = self._backend.meta
+            self._model = EmbeddingModel(
+                meta.get("model_name", self._config.model_name),
+                meta.get("pretrained", self._config.pretrained),
+                self._config.device,
+                fallback_dim=meta.get("dim", self._config.output_dim),
+            )
+        return self._model
+
+    def _encode(self, image_path: str | Path) -> tuple[Path, np.ndarray]:
         image_path = Path(image_path)
         if not image_path.exists():
             raise FileNotFoundError(f"Query image not found: {image_path}")
-
         try:
-            vector = self._get_model().encode_file(str(image_path))
+            return image_path, self._get_model().encode_file(str(image_path))
         except _DECODE_ERRORS as exc:
             logger.error("Failed to decode query image %s: %s", image_path, exc)
             raise InvalidQueryImageError(
@@ -295,17 +358,49 @@ class SimilarityEngine:
                 f"corrupt, truncated, or in an unsupported format."
             ) from exc
 
-        exclude: set[int] = set()
-        if exclude_self:
-            try:
-                rel = image_path.resolve().relative_to(
-                    self._config.dataset_root.resolve()
-                ).as_posix()
-                if rel in self._path_to_row:
-                    exclude.add(self._path_to_row[rel])
-            except ValueError:
-                pass  # query lives outside the dataset root
-        return self.search_vector(vector, k=k, exclude_rows=exclude)
+    def _relative_key(self, image_path: Path) -> str | None:
+        """Path relative to the dataset root, or ``None`` if outside it."""
+        try:
+            return image_path.resolve().relative_to(self._config.dataset_root.resolve()).as_posix()
+        except ValueError:
+            return None
+
+    # --- Querying -----------------------------------------------------------------
+    def search_vector(
+        self,
+        vector: np.ndarray,
+        k: int = 5,
+        exclude_path: str | None = None,
+        style: str | None = None,
+        artist: str | None = None,
+    ) -> list[SearchResult]:
+        """Return the top-``k`` results for a precomputed query vector."""
+        return self._backend.search(
+            vector, k, style=style, artist=artist, exclude_path=exclude_path
+        )
+
+    def search(
+        self,
+        image_path: str | Path,
+        k: int = 5,
+        exclude_self: bool = True,
+        style: str | None = None,
+        artist: str | None = None,
+    ) -> list[SearchResult]:
+        """Return the top-``k`` images most similar to ``image_path``.
+
+        Raises:
+            FileNotFoundError: If the query path does not exist.
+            InvalidQueryImageError: If the file exists but cannot be decoded.
+        """
+        path, vector = self._encode(image_path)
+        exclude = self._relative_key(path) if exclude_self else None
+        return self.search_vector(vector, k=k, exclude_path=exclude, style=style, artist=artist)
+
+    def identify(self, image_path: str | Path, k: int = 50, top: int = 5) -> list[ArtistVote]:
+        """Rank likely artists for ``image_path`` by similarity-weighted kNN vote."""
+        _, vector = self._encode(image_path)
+        return self._backend.identify(vector, k=k, top=top)
 
 
 # --------------------------------------------------------------------------------------
@@ -321,10 +416,23 @@ def _format_table(query: str, results: list[SearchResult]) -> str:
     return "\n".join(lines)
 
 
+def _format_votes(query: str, votes: list[ArtistVote]) -> str:
+    lines = [f"\nQuery: {query}  (artist vote over nearest neighbours)", "-" * 72]
+    for i, v in enumerate(votes, 1):
+        lines.append(
+            f"{i}. {v.name}  weight={v.weight:.3f}  votes={v.votes}  best={v.best:.4f}"
+        )
+    return "\n".join(lines)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Search for visually similar images.")
     parser.add_argument("--query", required=True, type=str, help="Path to the query image.")
     parser.add_argument("--top-k", type=int, default=5, help="Number of results (default: 5).")
+    parser.add_argument("--identify", action="store_true", help="Rank likely artists instead.")
+    parser.add_argument("--style", type=str, default=None, help="Filter by style folder.")
+    parser.add_argument("--artist", type=str, default=None, help="Filter by artist slug.")
+    parser.add_argument("--backend", type=str, default=None, choices=["flat", "pg"])
     parser.add_argument("--dataset-root", type=str, default=None)
     parser.add_argument("--embeddings-dir", type=str, default=None)
     parser.add_argument("--device", type=str, default=None, choices=["auto", "cpu", "cuda"])
@@ -341,19 +449,25 @@ def main(argv: list[str] | None = None) -> None:
     config = Config.from_env(args.dataset_root).merged_with(
         embeddings_dir=Path(args.embeddings_dir) if args.embeddings_dir else None,
         device=args.device,
+        store_backend=args.backend,
     )
     engine = SimilarityEngine(config, prefer_faiss=not args.no_faiss)
     try:
-        results = engine.search(args.query, k=args.top_k)
+        if args.identify:
+            votes = engine.identify(args.query)
+            payload: list[dict[str, Any]] = [v.as_dict() for v in votes]
+            text = _format_votes(args.query, votes)
+        else:
+            results = engine.search(
+                args.query, k=args.top_k, style=args.style, artist=args.artist
+            )
+            payload = [r.as_dict() for r in results]
+            text = _format_table(args.query, results)
     except (FileNotFoundError, InvalidQueryImageError) as exc:
-        # The technical cause is already logged; show the user a clean message.
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
-    if args.json:
-        print(json.dumps([r.as_dict() for r in results], indent=2))
-    else:
-        print(_format_table(args.query, results))
+    print(json.dumps(payload, indent=2) if args.json else text)
 
 
 if __name__ == "__main__":

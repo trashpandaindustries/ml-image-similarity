@@ -63,6 +63,7 @@ class Config:
     image_extensions: tuple[str, ...] = IMAGE_EXTENSIONS
     exclude_dirs: frozenset[str] = DEFAULT_EXCLUDE_DIRS
     output_dim: int = 768
+    store_backend: str = "pg"
 
     # --- Derived persistence paths -------------------------------------------------
     @property
@@ -112,6 +113,7 @@ class Config:
             batch_size=_env_int("BATCH_SIZE", cls.batch_size),
             num_workers=_env_int("NUM_WORKERS", cls.num_workers),
             checkpoint_every=_env_int("CHECKPOINT_EVERY", cls.checkpoint_every),
+            store_backend=_env_int("STORE_BACKEND", cls.store_backend),
         )
 
     def merged_with(self, **overrides: object) -> "Config":

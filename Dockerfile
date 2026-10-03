@@ -24,8 +24,13 @@ COPY requirements.txt .
 
 # CUDA-enabled PyTorch
 RUN pip install torch torchvision \
-        --index-url https://download.pytorch.org/whl/cu128 \
+        --index-url https://download.pytorch.org/whl/cpu \
     && pip install -r requirements.txt
+
+# CUDA-enabled PyTorch
+#RUN pip install torch torchvision \
+#        --index-url https://download.pytorch.org/whl/cu128 \
+#    && pip install -r requirements.txt
 
 COPY src ./src
 COPY demo ./demo

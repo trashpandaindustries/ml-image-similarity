@@ -5,6 +5,7 @@ torchvision>=0.17
 numpy>=1.26
 pillow>=10.0
 
+
 # Data handling & UX
 pandas>=2.1
 tqdm>=4.66
@@ -22,3 +23,10 @@ streamlit>=1.33
 # Routes Python SSL through the OS trust store so model downloads succeed behind
 # corporate proxies (whose root CA is trusted by the OS but not by certifi).
 truststore>=0.9
+
+
+#postgreSQL
+psycopg==3.2.0
+psycopg-binary==3.2.0
+psycopg_pool>=3.1.0
+pgvector<=0.3.0
