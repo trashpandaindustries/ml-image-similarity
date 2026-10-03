@@ -432,7 +432,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--identify", action="store_true", help="Rank likely artists instead.")
     parser.add_argument("--style", type=str, default=None, help="Filter by style folder.")
     parser.add_argument("--artist", type=str, default=None, help="Filter by artist slug.")
-    parser.add_argument("--backend", type=str, default=None, choices=["flat", "pg"])
+    parser.add_argument("--backend", type=str, default=None, choices=["flat", "pg", "supabase"])
     parser.add_argument("--dataset-root", type=str, default=None)
     parser.add_argument("--embeddings-dir", type=str, default=None)
     parser.add_argument("--device", type=str, default=None, choices=["auto", "cpu", "cuda"])
@@ -449,7 +449,7 @@ def main(argv: list[str] | None = None) -> None:
     config = Config.from_env(args.dataset_root).merged_with(
         embeddings_dir=Path(args.embeddings_dir) if args.embeddings_dir else None,
         device=args.device,
-        store_backend=args.backend,
+        store_backend="pg" if args.backend == "supabase" else args.backend,
     )
     engine = SimilarityEngine(config, prefer_faiss=not args.no_faiss)
     try:

@@ -63,7 +63,8 @@ class Config:
     image_extensions: tuple[str, ...] = IMAGE_EXTENSIONS
     exclude_dirs: frozenset[str] = DEFAULT_EXCLUDE_DIRS
     output_dim: int = 768
-    store_backend: str = "pg"
+    store_backend: str = "flat"
+    database_url: str | None = None
 
     # --- Derived persistence paths -------------------------------------------------
     @property
@@ -113,7 +114,11 @@ class Config:
             batch_size=_env_int("BATCH_SIZE", cls.batch_size),
             num_workers=_env_int("NUM_WORKERS", cls.num_workers),
             checkpoint_every=_env_int("CHECKPOINT_EVERY", cls.checkpoint_every),
-            store_backend=_env_int("STORE_BACKEND", cls.store_backend),
+            store_backend={"supabase": "pg", "postgres": "pg"}.get(
+                os.environ.get("STORE_BACKEND", cls.store_backend).lower(),
+                os.environ.get("STORE_BACKEND", cls.store_backend).lower(),
+            ),
+            database_url=os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL"),
         )
 
     def merged_with(self, **overrides: object) -> "Config":
@@ -128,6 +133,8 @@ class Config:
             FileNotFoundError: If the dataset root does not exist.
             NotADirectoryError: If the dataset root is not a directory.
         """
+        if self.store_backend not in {"flat", "pg"}:
+            raise ValueError("STORE_BACKEND must be either 'flat' or 'pg'.")
         if not self.dataset_root.exists():
             raise FileNotFoundError(f"Dataset root does not exist: {self.dataset_root}")
         if not self.dataset_root.is_dir():

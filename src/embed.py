@@ -378,7 +378,14 @@ def run(config: Config, limit: int | None = None) -> dict[str, Any]:
     )
 
     persist(embedded, elapsed, final=True)
-    return store.load_meta()
+    meta = store.load_meta()
+    if config.store_backend == "pg":
+        index = store.load()
+        from .pg_backend import PgVectorBackend  # optional dependency for flat-file users
+
+        PgVectorBackend.from_config(config).sync(index.embeddings, index.manifest, meta)
+        logger.info("Synced %d vectors to pgvector.", len(index))
+    return meta
 
 
 # --------------------------------------------------------------------------------------
@@ -396,6 +403,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=None,
                         help="Persist a resumable checkpoint every N embedded images.")
     parser.add_argument("--limit", type=int, default=None, help="Only embed the first N images.")
+    parser.add_argument("--backend", choices=["flat", "pg", "supabase"], default="supabase", help="Optionally sync the completed index to pgvector.")
     parser.add_argument("--log-level", type=str, default=None)
     return parser
 
@@ -412,6 +420,7 @@ def main(argv: list[str] | None = None) -> None:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         checkpoint_every=args.checkpoint_every,
+        store_backend="pg" if args.backend == "supabase" else args.backend,
     )
     meta = run(config, limit=args.limit)
     logger.info("Done. Index holds %d vectors of dim %d.", meta.get("count"), meta.get("dim"))
